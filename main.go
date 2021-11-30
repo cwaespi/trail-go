@@ -1,47 +1,72 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
-	"net/http"
+	"os"
 
-	"github.com/gorilla/mux"
+	"relafy/prisma/db"
+
+	"github.com/speps/go-hashids/v2"
 )
 
-// The new router function creates the router and
-// returns it to us. We can now use this function
-// to instantiate and test the router outside of the main function
-func newRouter() *mux.Router {
-	r := mux.NewRouter()
-	r.HandleFunc("/hello", handler).Methods("GET")
-
-	// Declare the static file directory and point it to the directory we just made
-	staticFileDirectory := http.Dir("./assets/")
-	// Declare the handler, that routes requests to their respective filename.
-	// The fileserver is wrapped in the `stripPrefix` method, because we want to
-	// remove the "/assets/" prefix when looking for files.
-	// For example, if we type "/assets/index.html" in our browser, the file server
-	// will look for only "index.html" inside the directory declared above.
-	// If we did not strip the prefix, the file server would look for "./assets/assets/index.html", and yield an error
-	staticFileHandler := http.StripPrefix("/assets/", http.FileServer(staticFileDirectory))
-	// The "PathPrefix" method acts as a matcher, and matches all routes starting
-	// with "/assets/", instead of the absolute route itself
-	r.PathPrefix("/assets/").Handler(staticFileHandler).Methods("GET")
-
-	r.HandleFunc("/bird", getBirdHandler).Methods("GET")
-	r.HandleFunc("/bird", createBirdHandler).Methods("POST")
-	return r
-}
-
 func main() {
-	// The router is now formed by calling the `newRouter` constructor function
-	// that we defined above. The rest of the code stays the same
-	r := newRouter()
-	err := http.ListenAndServe(":8080", r)
-	if err != nil {
-		panic(err.Error())
+	if err := run(); err != nil {
+		panic(err)
 	}
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hello World!")
+func hash(salt string) string {
+	hd := hashids.NewData()
+	hd.Salt = salt
+	hd.MinLength = 7
+	h, _ := hashids.NewWithData(hd)
+	e, _ := h.Encode([]int{45, 434})
+	//d, _ := h.DecodeWithError(e)
+
+	return e
+}
+
+func run() error {
+	client := db.NewClient()
+	if err := client.Prisma.Connect(); err != nil {
+		return err
+	}
+
+	defer func() {
+		if err := client.Prisma.Disconnect(); err != nil {
+			panic(err)
+		}
+	}()
+
+	ctx := context.Background()
+
+	url := os.Args[1]
+	short := hash(url)
+
+	// create a bit
+	createdBit, err := client.Bit.CreateOne(
+		db.Bit.URL.Set(url),
+		db.Bit.Short.Set(short),
+	).Exec(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, _ := json.MarshalIndent(createdBit, "", "  ")
+	fmt.Printf("created bit: %s\n", result)
+
+	// find a single bit
+	post, err := client.Bit.FindUnique(
+		db.Bit.ID.Equals(createdBit.ID),
+	).Exec(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, _ = json.MarshalIndent(post, "", "  ")
+	fmt.Printf("bit: %s\n", result)
+
+	return nil
 }
